@@ -1,266 +1,200 @@
 javascript
 const express = require('express');
-const pool = require('./db');
-
 const app = express();
 
 app.use(express.json());
 
-// Listar tarefas com filtros e paginacao
-app.get('/tarefas', async (req, res) => {
-    try {
-        const { concluida, prioridade } = req.query;
+// Banco de dados em memoria
+let tarefas = [
+    { id: 1, titulo: 'Aprender Express', concluida: false },
+    { id: 2, titulo: 'Criar minha primeira API', concluida: false }
+];
 
-        const pagina = Math.max(parseInt(req.query.pagina) || 1, 1);
-        const limite = Math.min(Math.max(parseInt(req.query.limite) || 10, 1), 100);
-        const deslocamento = (pagina - 1) * limite;
+let proximoId = 3;
 
-        let query = 'SELECT * FROM tarefas WHERE 1=1';
-        let parametros = [];
+// Validar o titulo da tarefa
+function validarTitulo(titulo) {
+    if (typeof titulo !== 'string') {
+        return 'O titulo deve ser um texto';
+    }
 
-        if (concluida !== undefined) {
-            if (concluida !== 'true' && concluida !== 'false') {
-                return res.status(400).json({
-                    erro: 'O filtro concluida deve ser true ou false'
-                });
-            }
+    if (!titulo.trim()) {
+        return 'O titulo nao pode ser vazio';
+    }
 
-            parametros.push(concluida === 'true');
-            query += ` AND concluida = $${parametros.length}`;
+    if (titulo.trim().length > 100) {
+        return 'O titulo deve ter no maximo 100 caracteres';
+    }
+
+    return null;
+}
+
+// Validar o ID da tarefa
+function validarId(id) {
+    return Number.isInteger(Number(id)) && Number(id) > 0;
+}
+
+// Listar tarefas com filtro opcional por status
+app.get('/tarefas', (req, res) => {
+    const { concluida } = req.query;
+    let resultado = tarefas;
+
+    if (concluida !== undefined) {
+        if (concluida !== 'true' && concluida !== 'false') {
+            return res.status(400).json({
+                erro: 'O filtro concluida deve ser true ou false'
+            });
         }
 
-        if (prioridade !== undefined) {
-            if (!['baixa', 'media', 'alta'].includes(prioridade)) {
-                return res.status(400).json({
-                    erro: 'Prioridade invalida'
-                });
-            }
-
-            parametros.push(prioridade);
-            query += ` AND prioridade = $${parametros.length}`;
-        }
-
-        parametros.push(limite);
-        query += ` ORDER BY id LIMIT $${parametros.length}`;
-
-        parametros.push(deslocamento);
-        query += ` OFFSET $${parametros.length}`;
-
-        const resultado = await pool.query(query, parametros);
-
-        res.json(resultado.rows);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ erro: 'Erro ao buscar tarefas' });
+        resultado = tarefas.filter(
+            tarefa => tarefa.concluida === (concluida === 'true')
+        );
     }
-});
 
-// Resumo das tarefas
-app.get('/tarefas/resumo', async (req, res) => {
-    try {
-        const resultado = await pool.query(`
-            SELECT concluida, COUNT(*) AS quantidade
-            FROM tarefas
-            GROUP BY concluida
-        `);
-
-        let concluidas = 0;
-        let pendentes = 0;
-
-        resultado.rows.forEach(tarefa => {
-            if (tarefa.concluida) {
-                concluidas = Number(tarefa.quantidade);
-            } else {
-                pendentes = Number(tarefa.quantidade);
-            }
-        });
-
-        res.json({ concluidas, pendentes });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({
-            erro: 'Erro ao buscar resumo das tarefas'
-        });
-    }
+    res.json(resultado);
 });
 
 // Buscar uma tarefa pelo ID
-app.get('/tarefas/:id', async (req, res) => {
-    try {
-        const resultado = await pool.query(
-            'SELECT * FROM tarefas WHERE id = $1',
-            [req.params.id]
-        );
+app.get('/tarefas/:id', (req, res) => {
+    const id = req.params.id;
 
-        if (resultado.rows.length === 0) {
-            return res.status(404).json({
-                erro: 'Tarefa nao encontrada'
-            });
-        }
-
-        res.json(resultado.rows[0]);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ erro: 'Erro ao buscar tarefa' });
+    if (!validarId(id)) {
+        return res.status(400).json({ erro: 'ID invalido' });
     }
+
+    const tarefa = tarefas.find(
+        tarefa => tarefa.id === Number(id)
+    );
+
+    if (!tarefa) {
+        return res.status(404).json({
+            erro: 'Tarefa nao encontrada'
+        });
+    }
+
+    res.json(tarefa);
 });
 
 // Criar uma nova tarefa
-app.post('/tarefas', async (req, res) => {
-    try {
-        const { titulo, prioridade } = req.body;
+app.post('/tarefas', (req, res) => {
+    const { titulo } = req.body;
 
-        if (typeof titulo !== 'string' || !titulo.trim()) {
-            return res.status(400).json({
-                erro: 'O titulo e obrigatorio'
-            });
+    const erro = validarTitulo(titulo);
+
+    if (erro) {
+        return res.status(400).json({ erro });
+    }
+
+    const tituloFormatado = titulo.trim();
+
+    const tarefaExistente = tarefas.find(
+        tarefa => tarefa.titulo.toLowerCase() === tituloFormatado.toLowerCase()
+    );
+
+    if (tarefaExistente) {
+        return res.status(400).json({
+            erro: 'Essa tarefa ja existe'
+        });
+    }
+
+    const novaTarefa = {
+        id: proximoId++,
+        titulo: tituloFormatado,
+        concluida: false
+    };
+
+    tarefas.push(novaTarefa);
+
+    res.status(201).json(novaTarefa);
+});
+
+// Atualizar uma tarefa pelo ID
+app.put('/tarefas/:id', (req, res) => {
+    const id = req.params.id;
+
+    if (!validarId(id)) {
+        return res.status(400).json({ erro: 'ID invalido' });
+    }
+
+    const tarefa = tarefas.find(
+        tarefa => tarefa.id === Number(id)
+    );
+
+    if (!tarefa) {
+        return res.status(404).json({
+            erro: 'Tarefa nao encontrada'
+        });
+    }
+
+    const { titulo, concluida } = req.body;
+
+    if (titulo !== undefined) {
+        const erro = validarTitulo(titulo);
+
+        if (erro) {
+            return res.status(400).json({ erro });
         }
 
         const tituloFormatado = titulo.trim();
 
-        const tarefaExistente = await pool.query(
-            'SELECT * FROM tarefas WHERE LOWER(titulo) = LOWER($1)',
-            [tituloFormatado]
+        const tarefaExistente = tarefas.find(
+            outraTarefa =>
+                outraTarefa.id !== Number(id) &&
+                outraTarefa.titulo.toLowerCase() === tituloFormatado.toLowerCase()
         );
 
-        if (tarefaExistente.rows.length > 0) {
+        if (tarefaExistente) {
             return res.status(400).json({
                 erro: 'Essa tarefa ja existe'
             });
         }
 
-        if (!['baixa', 'media', 'alta'].includes(prioridade)) {
-            return res.status(400).json({
-                erro: 'Prioridade invalida'
-            });
-        }
-
-        const resultado = await pool.query(
-            'INSERT INTO tarefas (titulo, prioridade) VALUES ($1, $2) RETURNING *',
-            [tituloFormatado, prioridade]
-        );
-
-        res.status(201).json(resultado.rows[0]);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ erro: 'Erro ao criar tarefa' });
+        tarefa.titulo = tituloFormatado;
     }
-});
 
-// Atualizar uma tarefa pelo ID
-app.put('/tarefas/:id', async (req, res) => {
-    try {
-        const { titulo, concluida, prioridade } = req.body;
-
-        const tarefaAtual = await pool.query(
-            'SELECT * FROM tarefas WHERE id = $1',
-            [req.params.id]
-        );
-
-        if (tarefaAtual.rows.length === 0) {
-            return res.status(404).json({
-                erro: 'Tarefa nao encontrada'
-            });
-        }
-
-        const tarefa = tarefaAtual.rows[0];
-
-        const novoTitulo = titulo !== undefined
-            ? titulo
-            : tarefa.titulo;
-
-        const novaConcluida = concluida !== undefined
-            ? concluida
-            : tarefa.concluida;
-
-        const novaPrioridade = prioridade !== undefined
-            ? prioridade
-            : tarefa.prioridade;
-
-        if (typeof novoTitulo !== 'string' || !novoTitulo.trim()) {
-            return res.status(400).json({
-                erro: 'O titulo e obrigatorio'
-            });
-        }
-
-        if (typeof novaConcluida !== 'boolean') {
+    if (concluida !== undefined) {
+        if (typeof concluida !== 'boolean') {
             return res.status(400).json({
                 erro: 'O campo concluida deve ser true ou false'
             });
         }
 
-        if (!['baixa', 'media', 'alta'].includes(novaPrioridade)) {
-            return res.status(400).json({
-                erro: 'Prioridade invalida'
-            });
-        }
-
-        const tarefaExistente = await pool.query(
-            'SELECT * FROM tarefas WHERE LOWER(titulo) = LOWER($1) AND id != $2',
-            [novoTitulo.trim(), req.params.id]
-        );
-
-        if (tarefaExistente.rows.length > 0) {
-            return res.status(400).json({
-                erro: 'Essa tarefa ja existe'
-            });
-        }
-
-        const resultado = await pool.query(
-            `UPDATE tarefas
-             SET titulo = $1, concluida = $2, prioridade = $3
-             WHERE id = $4
-             RETURNING *`,
-            [
-                novoTitulo.trim(),
-                novaConcluida,
-                novaPrioridade,
-                req.params.id
-            ]
-        );
-
-        res.json(resultado.rows[0]);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ erro: 'Erro ao atualizar tarefa' });
+        tarefa.concluida = concluida;
     }
+
+    res.json(tarefa);
 });
 
 // Excluir todas as tarefas concluidas
-app.delete('/tarefas', async (req, res) => {
-    try {
-        await pool.query(
-            'DELETE FROM tarefas WHERE concluida = true'
-        );
+app.delete('/tarefas', (req, res) => {
+    tarefas = tarefas.filter(
+        tarefa => !tarefa.concluida
+    );
 
-        res.status(204).send();
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({
-            erro: 'Erro ao excluir tarefas concluidas'
-        });
-    }
+    res.status(204).send();
 });
 
 // Excluir uma tarefa pelo ID
-app.delete('/tarefas/:id', async (req, res) => {
-    try {
-        const resultado = await pool.query(
-            'DELETE FROM tarefas WHERE id = $1 RETURNING *',
-            [req.params.id]
-        );
+app.delete('/tarefas/:id', (req, res) => {
+    const id = req.params.id;
 
-        if (resultado.rows.length === 0) {
-            return res.status(404).json({
-                erro: 'Tarefa nao encontrada'
-            });
-        }
-
-        res.status(204).send();
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ erro: 'Erro ao excluir tarefa' });
+    if (!validarId(id)) {
+        return res.status(400).json({ erro: 'ID invalido' });
     }
+
+    const indice = tarefas.findIndex(
+        tarefa => tarefa.id === Number(id)
+    );
+
+    if (indice === -1) {
+        return res.status(404).json({
+            erro: 'Tarefa nao encontrada'
+        });
+    }
+
+    tarefas.splice(indice, 1);
+
+    res.status(204).send();
 });
 
 // Iniciar o servidor
